@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+export MPD_HOST=/run/mpd:6600
+export SWAYSOCK="$(echo /run/user/1000/sway-ipc.1000.*.sock)"
+readonly root=~/multimedia/music #"$(mpc --format '%file%' mount|awk '{print $1}')"
+
+_wallpaper_cache="${XDG_CACHE_HOME:-/tmp}/wallpapers"
+mkdir -p "$_wallpaper_cache"
+
+reset () {
+    pkill swaybg
+}
+
+# $1 mode
+# $2 image
+# $3 output; default: all
+show () {
+    swaymsg exec "swaybg -o "${3:-\\*}" --mode '$1' --image \"$2\"" >/dev/null
+}
+
+# $1 image
+# $2 output width
+# $3 output height
+generate_ffmpeg_filter () {
+    local -r src="$1"
+    local -r ow="$2"
+    local -r oh="$3"
+
+    if [[ "$ow" -gt "$oh" ]]; then
+        # landscape
+        if [[ "$(image_dimensions "$src"|cut -dx -f2)" -gt "$oh" ]]; then
+            # image > output -> fit to output
+            cat <<EOF
+scale=w=${oh}:h=${oh}, split [original][copy];
+[copy] gblur=sigma=15, scale=w=ih/${oh}*${ow}:h=ih/${oh}*${ow}, crop=h=ih/${ow}*${oh} [blurred];
+[blurred][original]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2
+EOF
+        else
+            # image < output -> center on output
+            cat <<EOF
+split [original][copy];
+[copy] gblur=sigma=15, scale=w=${ow}:h=${ow}, crop=h=ih/${ow}*${oh} [blurred];
+[blurred][original]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2
+EOF
+        fi
+    else
+        # portrait
+        if [[ "$(image_dimensions "$src"|cut -dx -f1)" -gt "$ow" ]]; then
+            # image > output -> fit to output
+            cat <<EOF
+scale=w=${oh}:h=${oh}, split [original][copy];
+[copy] gblur=sigma=15, scale=h=iw/${ow}*${oh}:w=iw/${ow}*${oh}, crop=w=iw/${oh}*${ow} [blurred];
+[blurred][original]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2
+EOF
+        else
+            # image < output -> center on output
+            cat <<EOF
+split [original][copy];
+[copy] gblur=sigma=15, scale=h=${ow}/${ow}*${oh}:w=${ow}/${ow}*${oh}, crop=w=iw/${oh}*${ow} [blurred];
+[blurred][original]overlay=x=(main_w-overlay_w)/2:y=(main_h-overlay_h)/2
+EOF
+        fi
+    fi
+}
+
+# $1 image
+# $2 dest
+# $3 output width
+# $4 output height
+generate_wallpaper () {
+    local -r vf="$(generate_ffmpeg_filter "$1" "$3" "$4")"
+    ffmpeg -loglevel panic -y -i "$1" -vf "$vf" "$2"
+}
+
+readonly _cache_file="${_wallpaper_cache}/_source"
+readonly _cache_dimensions="${_wallpaper_cache}/_dimensions"
+> "$_cache_file" > "$_cache_dimensions"
+
+# $1 image
+# $2 dimensions
+cache_guard () {
+    if [ "$(cat "$_cache_file")" = "$1" ]; then
+        if [ "$(cat "$_cache_dimensions")" = "$2" ]; then
+            return 0
+        else
+            echo "$2" > "$_cache_dimensions"
+            return 1
+        fi
+    else
+        echo "$1" > "$_cache_file"
+        echo "$2" > "$_cache_dimensions"
+        return 1
+    fi
+}
+
+# $1 mode
+# $2 [image]
+show_wallpaper () {
+    local -r src="${2:-~/.wallpaper}"
+
+    case "$1" in
+        default)
+            cache_guard ~/.wallpaper "0x0" && return
+            reset
+            show fill ~/.wallpaper
+            ;;
+        musical)
+            swaymsg -t get_outputs \
+                | jq -r 'map([.name, .current_mode.width, .current_mode.height, .transform]|join(","))[]' \
+                | while IFS=',' read -r -- output ow oh transform; do
+                case "$transform" in
+                    90|270)
+                        cache_guard "$src" "${oh}x${ow}" && return
+                        reset
+                        local dst="${_wallpaper_cache}/$(sha1sum <<< "$src"|cut -d' ' -f1)_${output}_${oh}x${ow}.png"
+                        [ -r "$dst" ] || generate_wallpaper "$src" "$dst" "$oh" "$ow"
+                        ;;
+                    *)
+                        cache_guard "$src" "${ow}x${oh}" && return
+                        reset
+                        local dst="${_wallpaper_cache}/$(sha1sum <<< "$src"|cut -d' ' -f1)_${output}_${ow}x${oh}.png"
+                        [ -r "$dst" ] || generate_wallpaper "$src" "$dst" "$ow" "$oh"
+                        ;;
+                esac
+                show fill "$dst" "$output"
+            done
+            ;;
+    esac
+}
+
+# $1 image
+image_dimensions () {
+    identify "$1"|tr ' ' '\n'|grep -E '^[0-9]+x[0-9]+$'
+}
+
+handle () {
+    f=$(mpc --format '%file%' current)
+    while [ "$f" != '.' ]; do
+        f=$(dirname "$f")
+        cover=("$root/$f/"cover.*)
+        if [ -r "$cover" ]; then
+            echo "next wallpaper: $cover"
+            show_wallpaper musical "$cover"
+            return
+        fi
+    done
+    show_wallpaper default
+}
+
+show_wallpaper default
+mpc idleloop | while read event; do
+    [ "$event" = 'player' ] && handle
+done
