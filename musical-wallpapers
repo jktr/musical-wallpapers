@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 set -uo pipefail
 
 export MPD_HOST=/run/mpd:6600
