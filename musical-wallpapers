@@ -87,21 +87,23 @@ generate_wallpaper () {
 
 readonly _cache_file="${_wallpaper_cache}/_source"
 readonly _cache_dimensions="${_wallpaper_cache}/_dimensions"
-> "$_cache_file" > "$_cache_dimensions"
 
-# $1 image
-# $2 dimensions
+# $1 output
+# $2 image
+# $3 dimensions
 cache_guard () {
-    if [ "$(cat "$_cache_file")" = "$1" ]; then
-        if [ "$(cat "$_cache_dimensions")" = "$2" ]; then
+    >> "${_cache_file}_${1}"
+    >> "${_cache_dimensions}_${1}"
+    if [ "$(cat "${_cache_file}_${1}")" = "$2" ]; then
+        if [ "$(cat "${_cache_dimensions}_${1}")" = "$3" ]; then
             return 0
         else
-            echo "$2" > "$_cache_dimensions"
+            echo "$2" > "${_cache_dimensions}_${1}"
             return 1
         fi
     else
-        echo "$1" > "$_cache_file"
-        echo "$2" > "$_cache_dimensions"
+        echo "$2" > "${_cache_file}_${1}"
+        echo "$3" > "${_cache_dimensions}_${1}"
         return 1
     fi
 }
@@ -113,8 +115,8 @@ show_wallpaper () {
 
     case "$1" in
         default)
-            cache_guard ~/.wallpaper "0x0" && return
-            reset
+            cache_guard all ~/.wallpaper "0x0" && return
+            reset all
             show fill ~/.wallpaper
             ;;
         musical)
@@ -123,14 +125,14 @@ show_wallpaper () {
                 | while IFS=',' read -r -- output ow oh transform; do
                 case "$transform" in
                     90|270)
-                        cache_guard "$src" "${oh}x${ow}" && return
-                        reset
+                        cache_guard "$output" "$src" "${oh}x${ow}" && return
+                        reset "$output"
                         local dst="${_wallpaper_cache}/$(sha1sum <<< "$src"|cut -d' ' -f1)_${output}_${oh}x${ow}.png"
                         [ -r "$dst" ] || generate_wallpaper "$src" "$dst" "$oh" "$ow"
                         ;;
                     *)
-                        cache_guard "$src" "${ow}x${oh}" && return
-                        reset
+                        cache_guard "$output" "$src" "${ow}x${oh}" && return
+                        reset "$output"
                         local dst="${_wallpaper_cache}/$(sha1sum <<< "$src"|cut -d' ' -f1)_${output}_${ow}x${oh}.png"
                         [ -r "$dst" ] || generate_wallpaper "$src" "$dst" "$ow" "$oh"
                         ;;
